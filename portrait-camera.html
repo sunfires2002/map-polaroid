@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>縦カメラ</title>
+<style>
+:root{color-scheme:dark;--accent:#e2584b}
+html,body{height:100%;margin:0;background:#000;color:#fff;font-family:"Hiragino Sans","Yu Gothic",sans-serif;overflow:hidden}
+#app{position:fixed;inset:0;display:flex;flex-direction:column;padding-top:env(safe-area-inset-top,0);padding-bottom:env(safe-area-inset-bottom,0)}
+#stage{flex:1;position:relative;min-height:0;background:#111}
+#video,#shot{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;background:#000}
+#shot{display:none}
+#status{position:absolute;left:10px;top:10px;font-size:.8rem;background:rgba(0,0,0,.6);padding:4px 10px;border-radius:6px;max-width:calc(100% - 20px)}
+#msg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;text-align:center;padding:24px;line-height:1.7}
+#bar{display:flex;align-items:center;justify-content:center;gap:24px;padding:14px 16px 18px;background:#000;min-height:96px}
+#shutter{width:72px;height:72px;border-radius:50%;border:5px solid #fff;background:#fff;box-shadow:inset 0 0 0 4px #000;cursor:pointer;padding:0}
+#shutter:active{background:#ccc}
+.btn{padding:14px 22px;border-radius:10px;border:1px solid #777;background:#222;color:#fff;font:inherit;font-size:1rem;cursor:pointer}
+.btn.main{background:var(--accent);border-color:var(--accent);font-weight:600}
+.btn:focus-visible,#shutter:focus-visible{outline:3px solid var(--accent);outline-offset:3px}
+.hide{display:none!important}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <video id="video" playsinline muted></video>
+    <img id="shot" alt="撮影した写真">
+    <div id="status" role="status">準備中…</div>
+    <div id="msg" role="alert"></div>
+  </div>
+  <div id="bar">
+    <button id="shutter" aria-label="撮影"></button>
+    <button id="retake" class="btn hide">撮り直す</button>
+    <button id="save" class="btn main hide">保存</button>
+  </div>
+</div>
+<script>
+// ---EXIF-START---
+function buildExif(lat,lon,d){
+  const buf=new ArrayBuffer(188),v=new DataView(buf),T=10;
+  const u16=(p,x)=>v.setUint16(T+p,x),u32=(p,x)=>v.setUint32(T+p,x);
+  const ent=(p,tag,type,count,val)=>{u16(p,tag);u16(p+2,type);u32(p+4,count);u32(p+8,val)};
+  v.setUint16(0,0xFFE1);v.setUint16(2,186);v.setUint32(4,0x45786966);v.setUint16(8,0);
+  u16(0,0x4D4D);u16(2,0x002A);u32(4,8);
+  u16(8,2);ent(10,0x8769,4,1,38);ent(22,0x8825,4,1,56);u32(34,0);
+  u16(38,1);ent(40,0x9003,2,20,110);u32(52,0);
+  u16(56,4);
+  ent(58,1,2,2,0);v.setUint8(T+66,lat<0?83:78);
+  ent(70,2,5,3,130);
+  ent(82,3,2,2,0);v.setUint8(T+90,lon<0?87:69);
+  ent(94,4,5,3,154);u32(106,0);
+  const p2=n=>String(n).padStart(2,'0');
+  const s=`${d.getFullYear()}:${p2(d.getMonth()+1)}:${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+  for(let i=0;i<s.length;i++)v.setUint8(T+110+i,s.charCodeAt(i));
+  const dms=(val,p)=>{
+    const a=Math.abs(val),deg=Math.floor(a),mf=(a-deg)*60,mi=Math.floor(mf),se=(mf-mi)*60;
+    u32(p,deg);u32(p+4,1);u32(p+8,mi);u32(p+12,1);u32(p+16,Math.round(se*10000));u32(p+20,10000);
+  };
+  dms(lat,130);dms(lon,154);
+  return new Uint8Array(buf);
+}
+function withExif(jpg,lat,lon,d){
+  const seg=buildExif(lat,lon,d),out=new Uint8Array(jpg.length+seg.length);
+  out.set(jpg.subarray(0,2),0);out.set(seg,2);out.set(jpg.subarray(2),2+seg.length);
+  return out;
+}
+// ---EXIF-END---
+
+const $=id=>document.getElementById(id);
+let pos=null,shotBlob=null,shotName='photo.jpg';
+const status=t=>{$('status').textContent=t};
+const fail=t=>{$('msg').textContent=t;$('msg').style.display='flex';$('shutter').disabled=true};
+
+async function start(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    fail('このページではカメラが使えません。HTTPSで公開したページ(GitHub Pagesなど)で開いてください。');return;
+  }
+  try{
+    const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1080},height:{ideal:1920}},audio:false});
+    $('video').srcObject=stream;await $('video').play();
+  }catch(e){fail('カメラを開けませんでした。ブラウザでカメラを許可してください。');return}
+  if(!navigator.geolocation){status('位置情報: 非対応');return}
+  status('位置情報: 取得中…');
+  navigator.geolocation.watchPosition(
+    p=>{pos=p;status(`位置情報: OK(誤差およそ${Math.round(p.coords.accuracy)}m)`)},
+    ()=>status('位置情報: なし(許可すると地図つきにできます)'),
+    {enableHighAccuracy:true,maximumAge:5000,timeout:20000}
+  );
+}
+function setMode(review){
+  $('video').style.display=review?'none':'block';
+  $('shot').style.display=review?'block':'none';
+  $('shutter').classList.toggle('hide',review);
+  $('retake').classList.toggle('hide',!review);
+  $('save').classList.toggle('hide',!review);
+}
+function snap(){
+  const vd=$('video'),w=vd.videoWidth,h=vd.videoHeight;
+  if(!w)return;
+  const rot=w>h,c=document.createElement('canvas');
+  c.width=rot?h:w;c.height=rot?w:h;
+  const x=c.getContext('2d');
+  if(rot){x.translate(c.width,0);x.rotate(Math.PI/2)}
+  x.drawImage(vd,0,0);
+  const now=new Date(),p=pos;
+  c.toBlob(async b=>{
+    if(!b){status('撮影に失敗しました');return}
+    let bytes=new Uint8Array(await b.arrayBuffer());
+    if(p)bytes=withExif(bytes,p.coords.latitude,p.coords.longitude,now);
+    shotBlob=new Blob([bytes],{type:'image/jpeg'});
+    const z=n=>String(n).padStart(2,'0');
+    shotName=`photo-${now.getFullYear()}${z(now.getMonth()+1)}${z(now.getDate())}-${z(now.getHours())}${z(now.getMinutes())}${z(now.getSeconds())}.jpg`;
+    $('shot').src=URL.createObjectURL(shotBlob);
+    status(p?'位置情報つきで撮影しました':'位置情報なしで撮影しました');
+    setMode(true);
+  },'image/jpeg',0.92);
+}
+$('shutter').addEventListener('click',snap);
+$('retake').addEventListener('click',()=>{setMode(false);status(pos?'位置情報: OK':'位置情報: なし')});
+$('save').addEventListener('click',()=>{
+  if(!shotBlob)return;
+  const a=document.createElement('a');a.href=URL.createObjectURL(shotBlob);a.download=shotName;
+  document.body.appendChild(a);a.click();a.remove();
+});
+start();
+</script>
+</body>
+</html>
