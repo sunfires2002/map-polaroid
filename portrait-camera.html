@@ -32,6 +32,7 @@ html,body{height:100%;margin:0;background:#000;color:#fff;font-family:"Hiragino 
   </div>
   <div id="bar">
     <button id="shutter" aria-label="撮影"></button>
+    <button id="rot" class="btn">向き</button>
     <button id="retake" class="btn hide">撮り直す</button>
     <button id="save" class="btn main hide">保存</button>
   </div>
@@ -69,7 +70,19 @@ function withExif(jpg,lat,lon,d){
 // ---EXIF-END---
 
 const $=id=>document.getElementById(id);
-let pos=null,shotBlob=null,shotName='photo.jpg';
+let pos=null,shotBlob=null,shotName='photo.jpg',rotDeg=90;
+try{rotDeg=+localStorage.getItem('rotDeg')||90}catch(e){}
+function layout(){
+  const vd=$('video'),st=$('stage'),w=vd.videoWidth,h=vd.videoHeight;
+  if(!w)return;
+  ['width','height','left','top','transform'].forEach(k=>vd.style[k]='');
+  if(w>h){
+    const W=st.clientWidth,H=st.clientHeight;
+    vd.style.width=H+'px';vd.style.height=W+'px';
+    vd.style.left=(W-H)/2+'px';vd.style.top=(H-W)/2+'px';
+    vd.style.transform=`rotate(${rotDeg}deg)`;
+  }
+}
 const status=t=>{$('status').textContent=t};
 const fail=t=>{$('msg').textContent=t;$('msg').style.display='flex';$('shutter').disabled=true};
 
@@ -79,7 +92,7 @@ async function start(){
   }
   try{
     const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1080},height:{ideal:1920}},audio:false});
-    $('video').srcObject=stream;await $('video').play();
+    $('video').srcObject=stream;await $('video').play();layout();
   }catch(e){fail('カメラを開けませんでした。ブラウザでカメラを許可してください。');return}
   if(!navigator.geolocation){status('位置情報: 非対応');return}
   status('位置情報: 取得中…');
@@ -93,6 +106,7 @@ function setMode(review){
   $('video').style.display=review?'none':'block';
   $('shot').style.display=review?'block':'none';
   $('shutter').classList.toggle('hide',review);
+  $('rot').classList.toggle('hide',review);
   $('retake').classList.toggle('hide',!review);
   $('save').classList.toggle('hide',!review);
 }
@@ -102,8 +116,8 @@ function snap(){
   const rot=w>h,c=document.createElement('canvas');
   c.width=rot?h:w;c.height=rot?w:h;
   const x=c.getContext('2d');
-  if(rot){x.translate(c.width,0);x.rotate(Math.PI/2)}
-  x.drawImage(vd,0,0);
+  if(rot){x.translate(c.width/2,c.height/2);x.rotate(rotDeg*Math.PI/180);x.drawImage(vd,-w/2,-h/2)}
+  else x.drawImage(vd,0,0);
   const now=new Date(),p=pos;
   c.toBlob(async b=>{
     if(!b){status('撮影に失敗しました');return}
@@ -118,6 +132,13 @@ function snap(){
   },'image/jpeg',0.92);
 }
 $('shutter').addEventListener('click',snap);
+$('rot').addEventListener('click',()=>{
+  rotDeg=rotDeg===90?-90:90;
+  try{localStorage.setItem('rotDeg',rotDeg)}catch(e){}
+  layout();
+});
+$('video').addEventListener('loadedmetadata',layout);
+window.addEventListener('resize',layout);
 $('retake').addEventListener('click',()=>{setMode(false);status(pos?'位置情報: OK':'位置情報: なし')});
 $('save').addEventListener('click',()=>{
   if(!shotBlob)return;

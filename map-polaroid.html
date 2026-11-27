@@ -145,7 +145,7 @@ $('file').addEventListener('change',async e=>{
   if(!/jpe?g/i.test(f.type)){msg('JPEG写真だけ対応しています(HEICは未対応)。',true);return}
   try{
     const ex=await readExif(f);
-    if(!ex.gps){msg('この写真には位置情報が入っていません。',true);return}
+    if(!ex.gps){msg('この写真には位置情報が入っていません。写真アプリ経由で選ぶと位置情報が消えることがあります。選ぶ画面で「ファイル」や「ダウンロード」から選び直してみてください。',true);return}
     const bmp=await createImageBitmap(f,{imageOrientation:'from-image'});
     state={bmp,gps:ex.gps,date:ex.date,name:f.name};
     render();
