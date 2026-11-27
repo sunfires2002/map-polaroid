@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>地図つきポラロイド</title>
+<style>
+:root{--bg:#e9ece8;--ink:#222;--sub:#5d655f;--card:#fff;--line:#c9cfc9;--accent:#c93a2e;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1d201e;--ink:#eceeea;--sub:#a3aaa4;--card:#2a2e2b;--line:#454b46;--accent:#e2584b;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Hiragino Sans","Yu Gothic",sans-serif;line-height:1.6;padding:20px 16px 40px}
+main{max-width:560px;margin:0 auto}
+h1{font-size:1.25rem;margin:0 0 4px}
+p.lead{margin:0 0 16px;color:var(--sub);font-size:.9rem}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;display:grid;gap:12px}
+label{display:flex;align-items:center;gap:8px;font-size:.92rem}
+select,button,input[type=file]{font:inherit;color:inherit}
+select{padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--card)}
+button{padding:10px 14px;border:0;border-radius:8px;background:var(--accent);color:#fff;font-weight:600;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#msg{min-height:1.5em;font-size:.9rem;color:var(--sub)}
+#msg.err{color:var(--accent)}
+#out{width:100%;height:auto;margin-top:16px;display:none;box-shadow:0 2px 14px rgba(0,0,0,.25)}
+.note{font-size:.8rem;color:var(--sub);margin-top:16px}
+</style>
+</head>
+<body>
+<main>
+<h1>地図つきポラロイド</h1>
+<p class="lead">写真を選ぶと、撮影した場所の地図が下の余白に付きます。写真は端末の外に出ません。</p>
+<div class="panel">
+  <input type="file" id="file" accept="image/jpeg">
+  <label>地図の広さ
+    <select id="zoom">
+      <option value="12">広域(街のあたり)</option>
+      <option value="15" selected>近所</option>
+      <option value="17">細かく</option>
+    </select>
+  </label>
+  <label><input type="checkbox" id="showCoord" checked> 座標も文字で入れる</label>
+  <button id="save" disabled>画像として保存</button>
+  <div id="msg" role="status">JPEG写真を1枚選んでください。</div>
+</div>
+<canvas id="out"></canvas>
+<p class="note">地図:国土地理院(地理院タイル)を加工して作成。地図なしで使いたい時や、場所を知られたくない写真は、共有しないでください。</p>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const msg=(t,err)=>{$('msg').textContent=t;$('msg').className=err?'err':''};
+let state=null, token=0;
+
+function parseExif(v,t){
+  const le=v.getUint16(t)===0x4949;
+  const g16=p=>v.getUint16(p,le), g32=p=>v.getUint32(p,le);
+  const readIfd=p=>{const n=g16(p),r={};for(let i=0;i<n;i++){const e=p+2+i*12;r[g16(e)]={type:g16(e+2),count:g32(e+4),off:e+8}}return r};
+  const val=e=>{
+    const sz={1:1,2:1,3:2,4:4,5:8}[e.type]||1,p=sz*e.count>4?t+g32(e.off):e.off;
+    if(e.type===2){let s='';for(let i=0;i<e.count-1;i++)s+=String.fromCharCode(v.getUint8(p+i));return s}
+    if(e.type===5){const a=[];for(let i=0;i<e.count;i++){const d=g32(p+i*8+4);a.push(d?g32(p+i*8)/d:0)}return a}
+    return e.type===4?g32(p):g16(p);
+  };
+  const i0=readIfd(t+g32(t+4));let date=null;
+  if(i0[0x8769]){const ex=readIfd(t+val(i0[0x8769]));if(ex[0x9003])date=val(ex[0x9003])}
+  if(!i0[0x8825])return{gps:null,date};
+  const gp=readIfd(t+val(i0[0x8825]));
+  if(!gp[2]||!gp[4])return{gps:null,date};
+  const la=val(gp[2]),lo=val(gp[4]);
+  let lat=la[0]+la[1]/60+la[2]/3600,lon=lo[0]+lo[1]/60+lo[2]/3600;
+  if(gp[1]&&val(gp[1])==='S')lat=-lat;
+  if(gp[3]&&val(gp[3])==='W')lon=-lon;
+  if(!isFinite(lat)||!isFinite(lon)||(lat===0&&lon===0))return{gps:null,date};
+  return{gps:{lat,lon},date};
+}
+async function readExif(file){
+  const v=new DataView(await file.arrayBuffer());
+  if(v.getUint16(0)!==0xFFD8)return{gps:null,date:null};
+  let o=2;
+  while(o<v.byteLength-4){
+    const mk=v.getUint16(o),len=v.getUint16(o+2);
+    if(mk===0xFFE1&&v.getUint32(o+4)===0x45786966)return parseExif(v,o+10);
+    if((mk&0xFF00)!==0xFF00)break;
+    o+=2+len;
+  }
+  return{gps:null,date:null};
+}
+const loadTile=(z,x,y)=>new Promise((res,rej)=>{
+  const im=new Image();im.crossOrigin='anonymous';
+  im.onload=()=>res(im);im.onerror=()=>rej(new Error('tile'));
+  im.src=`https://cyberjapandata.gsi.go.jp/xyz/std/${z}/${x}/${y}.png`;
+});
+async function drawMap(ctx,lat,lon,z,x0,y0,size){
+  const n=2**z,r=lat*Math.PI/180;
+  const wx=(lon+180)/360*n*256,wy=(1-Math.log(Math.tan(r)+1/Math.cos(r))/Math.PI)/2*n*256;
+  const left=wx-size/2,top=wy-size/2;
+  const jobs=[];
+  for(let ty=Math.floor(top/256);ty<=Math.floor((top+size)/256);ty++)
+    for(let tx=Math.floor(left/256);tx<=Math.floor((left+size)/256);tx++)
+      jobs.push(loadTile(z,tx,ty).then(im=>({im,tx,ty})));
+  const tiles=await Promise.all(jobs);
+  ctx.save();ctx.beginPath();ctx.rect(x0,y0,size,size);ctx.clip();
+  ctx.fillStyle='#dfe3df';ctx.fillRect(x0,y0,size,size);
+  tiles.forEach(({im,tx,ty})=>ctx.drawImage(im,x0+tx*256-left,y0+ty*256-top));
+  const cx=x0+size/2,cy=y0+size/2;
+  ctx.beginPath();ctx.arc(cx,cy,14,0,7);ctx.fillStyle='#c93a2e';ctx.fill();
+  ctx.lineWidth=5;ctx.strokeStyle='#fff';ctx.stroke();
+  ctx.restore();
+  ctx.lineWidth=2;ctx.strokeStyle='#bfc4bf';ctx.strokeRect(x0,y0,size,size);
+}
+function fmtDate(d){
+  const m=d&&d.match(/^(\d{4}):(\d{2}):(\d{2})/);
+  return m?`${m[1]}年${+m[2]}月${+m[3]}日`:'';
+}
+async function render(){
+  if(!state)return;
+  const my=++token,{bmp,gps,date}=state;
+  const W=1080,M=40,PW=W-2*M,ph=Math.round(bmp.height*PW/bmp.width),B=440,H=M+ph+B;
+  const c=$('out'),ctx=c.getContext('2d');
+  c.width=W;c.height=H;
+  ctx.fillStyle='#f6f6f3';ctx.fillRect(0,0,W,H);
+  ctx.drawImage(bmp,M,M,PW,ph);
+  const y0=M+ph+30,S=360;
+  msg('地図を読み込み中…');
+  try{await drawMap(ctx,gps.lat,gps.lon,+$('zoom').value,M,y0,S)}
+  catch(e){if(my===token)msg('地図を読み込めませんでした。ネットにつながっているか確認してください。',true);return}
+  if(my!==token)return;
+  const tx=M+S+36;
+  ctx.fillStyle='#222';ctx.textBaseline='top';
+  ctx.font='600 46px "Hiragino Sans","Yu Gothic",sans-serif';
+  const ds=fmtDate(date);if(ds)ctx.fillText(ds,tx,y0);
+  ctx.font='30px "Hiragino Sans","Yu Gothic",sans-serif';ctx.fillStyle='#555';
+  if($('showCoord').checked){
+    ctx.fillText(`北緯 ${gps.lat.toFixed(4)}`,tx,y0+80);
+    ctx.fillText(`東経 ${gps.lon.toFixed(4)}`,tx,y0+122);
+  }
+  ctx.font='22px "Hiragino Sans","Yu Gothic",sans-serif';ctx.fillStyle='#777';
+  ctx.fillText('地図:国土地理院(地理院タイル)',tx,y0+S-58);
+  ctx.fillText('を加工して作成',tx,y0+S-30);
+  c.style.display='block';$('save').disabled=false;
+  msg('できました。保存できます。');
+}
+$('file').addEventListener('change',async e=>{
+  const f=e.target.files[0];if(!f)return;
+  $('save').disabled=true;$('out').style.display='none';state=null;
+  if(!/jpe?g/i.test(f.type)){msg('JPEG写真だけ対応しています(HEICは未対応)。',true);return}
+  try{
+    const ex=await readExif(f);
+    if(!ex.gps){msg('この写真には位置情報が入っていません。',true);return}
+    const bmp=await createImageBitmap(f,{imageOrientation:'from-image'});
+    state={bmp,gps:ex.gps,date:ex.date,name:f.name};
+    render();
+  }catch(err){msg('写真を読み込めませんでした。',true)}
+});
+$('zoom').addEventListener('change',render);
+$('showCoord').addEventListener('change',render);
+$('save').addEventListener('click',()=>{
+  $('out').toBlob(b=>{
+    if(!b){msg('保存用の画像を作れませんでした。地図の読み込み設定が原因の可能性があります。',true);return}
+    const a=document.createElement('a');a.href=URL.createObjectURL(b);
+    a.download='polaroid-'+(state.name||'photo').replace(/\.[^.]+$/,'')+'.png';
+    document.body.appendChild(a);a.click();a.remove();
+  },'image/png');
+});
+</script>
+</body>
+</html>
