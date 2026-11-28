@@ -23,6 +23,9 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid 
 #msg.err{color:var(--accent)}
 #out{width:100%;height:auto;margin-top:16px;display:none;box-shadow:0 2px 14px rgba(0,0,0,.25)}
 .note{font-size:.8rem;color:var(--sub);margin-top:16px}
+button.sub{background:transparent;color:var(--ink);border:1px solid var(--line)}
+#linkBox{font-size:.85rem;word-break:break-all}
+#linkBox a{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -40,10 +43,12 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid 
   </label>
   <label><input type="checkbox" id="showCoord" checked> 座標も文字で入れる</label>
   <button id="save" disabled>画像として保存</button>
+  <button id="copy" class="sub" disabled>地図のリンクをコピー</button>
   <div id="msg" role="status">JPEG写真を1枚選んでください。</div>
+  <div id="linkBox"></div>
 </div>
 <canvas id="out"></canvas>
-<p class="note">地図:国土地理院(地理院タイル)を加工して作成。地図なしで使いたい時や、場所を知られたくない写真は、共有しないでください。</p>
+<p class="note">地図:国土地理院(地理院タイル)を加工して作成。リンクには正確な位置が入ります(画像に座標の文字を出さなくても、リンクを送れば場所は伝わります)。場所を知られたくない写真は、共有しないでください。</p>
 </main>
 <script>
 const $=id=>document.getElementById(id);
@@ -136,12 +141,12 @@ async function render(){
   ctx.font='22px "Hiragino Sans","Yu Gothic",sans-serif';ctx.fillStyle='#777';
   ctx.fillText('地図:国土地理院(地理院タイル)',tx,y0+S-58);
   ctx.fillText('を加工して作成',tx,y0+S-30);
-  c.style.display='block';$('save').disabled=false;
+  c.style.display='block';$('save').disabled=false;showLink();
   msg('できました。保存できます。');
 }
 $('file').addEventListener('change',async e=>{
   const f=e.target.files[0];if(!f)return;
-  $('save').disabled=true;$('out').style.display='none';state=null;
+  $('save').disabled=true;$('copy').disabled=true;$('linkBox').textContent='';$('out').style.display='none';state=null;
   if(!/jpe?g/i.test(f.type)){msg('JPEG写真だけ対応しています(HEICは未対応)。',true);return}
   try{
     const ex=await readExif(f);
@@ -153,6 +158,26 @@ $('file').addEventListener('change',async e=>{
 });
 $('zoom').addEventListener('change',render);
 $('showCoord').addEventListener('change',render);
+const mapLink=g=>`https://www.google.com/maps/search/?api=1&query=${g.lat.toFixed(6)},${g.lon.toFixed(6)}`;
+function showLink(){
+  const url=mapLink(state.gps),box=$('linkBox');
+  box.textContent='';
+  const a=document.createElement('a');
+  a.href=url;a.target='_blank';a.rel='noopener';a.textContent='地図アプリで開いて確認する';
+  box.appendChild(a);
+  $('copy').disabled=false;
+}
+$('copy').addEventListener('click',async()=>{
+  if(!state)return;
+  const url=mapLink(state.gps);
+  try{await navigator.clipboard.writeText(url);msg('リンクをコピーしました。')}
+  catch(e){
+    const ta=document.createElement('textarea');ta.value=url;document.body.appendChild(ta);ta.select();
+    let ok=false;try{ok=document.execCommand('copy')}catch(_){}
+    ta.remove();
+    msg(ok?'リンクをコピーしました。':'コピーできませんでした。「地図アプリで開いて確認する」を長押ししてリンクをコピーしてください。',!ok);
+  }
+});
 $('save').addEventListener('click',()=>{
   $('out').toBlob(b=>{
     if(!b){msg('保存用の画像を作れませんでした。地図の読み込み設定が原因の可能性があります。',true);return}
