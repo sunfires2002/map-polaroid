@@ -33,7 +33,7 @@ button.sub{background:transparent;color:var(--ink);border:1px solid var(--line)}
 <h1>地図つきポラロイド</h1>
 <p class="lead">写真を選ぶと、撮影した場所の地図が下の余白に付きます。写真は端末の外に出ません。</p>
 <div class="panel">
-  <input type="file" id="file" accept="image/jpeg">
+  <input type="file" id="file">
   <label>地図の広さ
     <select id="zoom">
       <option value="12">広域(街のあたり)</option>
@@ -44,7 +44,7 @@ button.sub{background:transparent;color:var(--ink);border:1px solid var(--line)}
   <label><input type="checkbox" id="showCoord" checked> 座標も文字で入れる</label>
   <button id="save" disabled>画像として保存</button>
   <button id="copy" class="sub" disabled>地図のリンクをコピー</button>
-  <div id="msg" role="status">JPEG写真を1枚選んでください。</div>
+  <div id="msg" role="status">JPEG写真を1枚選んでください。「写真」の一覧ではなく、「ファイル」の画面(ダウンロードなど)から選ぶと、位置情報が残ります。</div>
   <div id="linkBox"></div>
 </div>
 <canvas id="out"></canvas>
